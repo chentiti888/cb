@@ -151,17 +151,19 @@ generate_node_link() {
     local obfs_password="$4"
     local sni_domain="$5"
     local insecure="$6"
+    local mode="${7:-plain}"   # plain=默认链接  hop=带端口跳跃的链接
     
     local link="hysteria2://$auth_password@$server_ip:$port"
     local params=""
     
-    # 添加端口跳跃参数
+    # 添加端口跳跃参数（仅 hop 模式）
     local port_hopping=$(get_port_hopping_info)
-    if [[ -n "$port_hopping" && "$port_hopping" != "未配置" ]]; then
+    if [[ "$mode" == "hop" && -n "$port_hopping" && "$port_hopping" != "未配置" ]]; then
         # 提取纯净的端口范围格式（如：20000-50000）
         local port_range=$(echo "$port_hopping" | grep -oE '[0-9]+-[0-9]+' | head -1)
         if [[ -n "$port_range" ]]; then
-            params="${params}&ports=$port_range"
+            # mport 是社区客户端（小火箭、v2rayN 等）识别的端口跳跃参数，ports 保留用于兼容
+            params="${params}&mport=$port_range&ports=$port_range"
         fi
     fi
     
@@ -184,7 +186,11 @@ generate_node_link() {
         link="${link}?${params}"
     fi
     
-    link="${link}#Hysteria2-Server"
+    if [[ "$mode" == "hop" ]]; then
+        link="${link}#Hysteria2-Hop"
+    else
+        link="${link}#Hysteria2-Server"
+    fi
     
     echo "$link"
 }
@@ -548,6 +554,11 @@ display_node_info() {
 
     # 生成链接（使用服务器地址）
     local node_link=$(generate_node_link "$server_address" "$port" "$auth_password" "$obfs_password" "$sni_domain" "$insecure")
+    # 已配置端口跳跃时，额外生成一条带跳跃参数的链接（订阅里也会包含）
+    NODE_LINK_HOP=""
+    if [[ -n "$port_hopping" && "$port_hopping" != "未配置" ]]; then
+        NODE_LINK_HOP=$(generate_node_link "$server_address" "$port" "$auth_password" "$obfs_password" "$sni_domain" "$insecure" "hop")
+    fi
     
     while true; do
         echo -e "${CYAN}=== 节点信息选项 ===${NC}"
@@ -589,9 +600,14 @@ show_node_links() {
     echo ""
     
     # 显示 Hysteria2 节点链接
-    echo -e "${YELLOW}Hysteria2 节点链接:${NC}"
+    echo -e "${YELLOW}Hysteria2 节点链接 (默认):${NC}"
     echo "$node_link"
     echo ""
+    if [[ -n "${NODE_LINK_HOP:-}" ]]; then
+        echo -e "${YELLOW}Hysteria2 节点链接 (端口跳跃):${NC}"
+        echo "$NODE_LINK_HOP"
+        echo ""
+    fi
     
     echo -e "${BLUE}使用说明:${NC}"
     echo "• 复制上方链接到支持 Hysteria2 的客户端"
@@ -670,12 +686,18 @@ generate_subscription_files() {
     local singbox_pc_sub="$sub_dir/singbox-pc-${uuid}.json"
     local base64_sub="$sub_dir/base64-${uuid}.txt"
     
+    # 订阅内容：默认链接 + (已配置端口跳跃时) 端口跳跃链接，每行一条
+    local sub_links="$node_link"
+    if [[ -n "${NODE_LINK_HOP:-}" ]]; then
+        sub_links+=$'\n'"$NODE_LINK_HOP"
+    fi
+
     # 1. Hysteria2 原生订阅格式
-    echo "$node_link" > "$hysteria2_sub"
+    echo "$sub_links" > "$hysteria2_sub"
     
     # 2. Base64编码订阅 (通用格式，兼容v2rayNG等客户端)
     # 直接对节点链接进行base64编码，不添加注释避免解析问题
-    echo "$node_link" | base64 -w 0 > "$base64_sub"
+    echo "$sub_links" | base64 -w 0 > "$base64_sub"
     for alt_root in "/usr/share/nginx/html" "/var/www/html"; do
         alt_dir="$alt_root/sub"
         if [[ "$alt_dir" != "$sub_dir" ]]; then

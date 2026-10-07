@@ -1122,6 +1122,9 @@ $(echo "hysteria2://$auth_password@$server_ip:443?sni=$sni_domain&insecure=1&obf
 EOF
 
     echo -e "${GREEN}节点信息已保存到: $node_file${NC}"
+# 节点链接 - 端口跳跃 (Hysteria2://)
+hysteria2://$auth_password@$server_ip:443?mport=$start_port-$end_port&sni=$sni_domain&insecure=1&obfs=salamander&obfs-password=$obfs_password#Hysteria2-QuickSetup-Hop
+
 }
 
 # 生成手动配置节点信息（仅供“手动配置”使用）
@@ -1213,6 +1216,7 @@ generate_manual_node_info() {
 # Hysteria2 节点信息（手动配置）
 # 生成时间: $(date)
 
+    MANUAL_NODE_URL="$node_url"
 服务器地址: ${manual_host}:${manual_port}
 认证密码: ${manual_password}
 SNI域名: ${manual_sni}
@@ -1304,6 +1308,28 @@ generate_hysteria_config() {
     ask_restart_service
 
     echo ""
+
+    # 已开启端口跳跃时，额外给出一条带跳跃参数的节点链接
+    if [[ -f /etc/hysteria/port-hopping.conf && -n "${MANUAL_NODE_URL:-}" ]]; then
+        local hop_url
+        hop_url=$(
+            START_PORT=""; END_PORT=""
+            # shellcheck source=/dev/null
+            source /etc/hysteria/port-hopping.conf 2>/dev/null
+            if [[ -n "$START_PORT" && -n "$END_PORT" ]]; then
+                base="${MANUAL_NODE_URL%%#*}"
+                if [[ "$base" == *\?* ]]; then
+                    echo "${base%%\?*}?mport=$START_PORT-$END_PORT&${base#*\?}#Hysteria2-Manual-Hop"
+                fi
+            fi
+        )
+        if [[ -n "$hop_url" ]]; then
+            echo ""
+            echo -e "${CYAN}=== 节点链接 (端口跳跃) ===${NC}"
+            echo "$hop_url"
+            echo ""
+        fi
+    fi
     echo -e "${YELLOW}其他管理命令:${NC}"
     echo "1. 查看状态: systemctl status hysteria-server.service"
     echo "2. 查看日志: journalctl -u hysteria-server.service"
