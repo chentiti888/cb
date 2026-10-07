@@ -175,6 +175,7 @@ download_scripts() {
         "performance-utils.sh:性能工具模块"
         "post-deploy-check.sh:部署后检查模块"
         "sys-opt.sh:系统性能优化模块"
+        "anytls.sh:AnyTLS 协议模块"
         "update.sh:脚本更新模块"
     )
 

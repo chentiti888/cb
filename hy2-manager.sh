@@ -163,9 +163,10 @@ print_menu() {
     echo -e "${GREEN}12.${NC} 关于脚本"
     echo -e "${CYAN}13.${NC} 系统性能优化 (BBR)"
     echo -e "${CYAN}14.${NC} 检查脚本更新"
+    echo -e "${CYAN}15.${NC} AnyTLS 协议管理"
     echo -e "${RED} 0.${NC} 退出"
     echo ""
-    echo -n -e "${BLUE}请输入选项 [0-14]: ${NC}"
+    echo -n -e "${BLUE}请输入选项 [0-15]: ${NC}"
 }
 
 # 检查 Hysteria2 是否已安装
@@ -231,6 +232,17 @@ show_status() {
         echo -e "程序状态: ${RED}❌ 未安装${NC}"
     fi
     echo ""
+
+    # AnyTLS 状态（仅在已安装时显示）
+    if [[ -x /usr/local/bin/sing-box-anytls ]]; then
+        echo -e "${CYAN}AnyTLS 状态:${NC}"
+        if systemctl is-active --quiet anytls-server.service 2>/dev/null; then
+            echo -e "服务状态: ${GREEN}✅ 运行中${NC}"
+        else
+            echo -e "服务状态: ${YELLOW}⏸️  未运行${NC}"
+        fi
+        echo ""
+    fi
 }
 
 # 安全地执行脚本
@@ -2568,8 +2580,8 @@ main() {
         read -r choice
         
         # 输入验证
-        if ! validate_input "$choice" 0 14; then
-            log_error "请输入 0-14 之间的数字"
+        if ! validate_input "$choice" 0 15; then
+            log_error "请输入 0-15 之间的数字"
             sleep 2
             continue
         fi
@@ -2589,6 +2601,11 @@ main() {
             12) about_script ;;
             13)
                 if safe_source_script "$SCRIPTS_DIR/sys-opt.sh" "系统优化脚本"; then
+                fi
+                ;;
+            15)
+                if safe_source_script "$SCRIPTS_DIR/anytls.sh" "AnyTLS 模块"; then
+                    anytls_menu
                     sys_optimization_menu
                 fi
                 ;;

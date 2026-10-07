@@ -46,6 +46,7 @@ FILES_TO_UPDATE=(
     "scripts/firewall-manager.sh"
     "scripts/post-deploy-check.sh"
     "scripts/sys-opt.sh"
+    "scripts/anytls.sh"
     "scripts/update.sh"
     "scripts/input-validation.sh"
 )
