@@ -2528,9 +2528,15 @@ cleanup_anytls() {
         return 0
     fi
     log_info "清理 AnyTLS..."
-    local port=""
+    local port="" acme_domain=""
     if [[ -f /etc/anytls/anytls.conf ]]; then
         port=$(sed -nE "s/^AT_PORT='?([0-9]+)'?.*/\\1/p" /etc/anytls/anytls.conf 2>/dev/null | head -1) || port=""
+        if grep -q "^AT_CERT_MODE='acme'" /etc/anytls/anytls.conf 2>/dev/null; then
+            acme_domain=$(sed -nE "s/^AT_DOMAIN='?([^']+)'?.*/\\1/p" /etc/anytls/anytls.conf 2>/dev/null | head -1) || acme_domain=""
+        fi
+    fi
+    if [[ -n "$acme_domain" && -x "${HOME:-/root}/.acme.sh/acme.sh" ]]; then
+        "${HOME:-/root}/.acme.sh/acme.sh" --remove -d "$acme_domain" --ecc >/dev/null 2>&1 || true
     fi
     systemctl disable --now anytls-server.service >/dev/null 2>&1 || true
     rm -f /etc/systemd/system/anytls-server.service

@@ -31,7 +31,7 @@ ANYTLS_DEFAULT_SNI="cdn.jsdelivr.net"
 # 当前配置（由 anytls_load_conf 读取）
 AT_PORT=""
 AT_PASSWORD=""
-AT_CERT_MODE=""   # self | hy2 | custom
+AT_CERT_MODE=""   # self | hy2 | custom | acme
 AT_CERT_FILE=""
 AT_KEY_FILE=""
 AT_DOMAIN=""      # hy2/custom 模式下的真实域名
@@ -429,6 +429,76 @@ anytls_gen_selfsigned() {
     return 0
 }
 
+# 用 acme.sh 为域名申请证书 (standalone，占用 TCP 80，不依赖 hy2)
+# 成功后证书装到 $ANYTLS_DIR/server.crt|key，acme.sh 自带定时续期
+anytls_issue_cert() {
+    local domain="$1"
+    local acme_home="${HOME:-/root}/.acme.sh"
+    local acme_bin="$acme_home/acme.sh"
+
+    if anytls_port_in_use 80; then
+        echo -e "${RED}TCP 80 端口已被占用，申请证书需要临时使用 80 端口${NC}"
+        echo "占用情况:"
+        ss -tlnp 2>/dev/null | awk 'NR>1 && $4 ~ /:80$/' | head -3
+        echo "请先停止占用 80 的程序，或改用\"自己的证书文件\"方式"
+        return 1
+    fi
+
+    # 域名解析检查（只提醒，不强制：可能是 CDN/IPv6 等情况）
+    local my_ip resolved
+    my_ip=$(anytls_get_ip 2>/dev/null) || my_ip=""
+    resolved=$(getent ahostsv4 "$domain" 2>/dev/null | awk 'NR==1{print $1}') || resolved=""
+    if [[ -z "$resolved" ]]; then
+        echo -e "${YELLOW}提示: 暂时解析不到 $domain，请确认域名已添加 A 记录指向本机${NC}"
+    elif [[ -n "$my_ip" && "$resolved" != "$my_ip" ]]; then
+        echo -e "${YELLOW}提示: $domain 解析到 $resolved，本机 IP 是 $my_ip，两者不一致可能导致申请失败${NC}"
+        echo "（如果开了 Cloudflare 小黄云，请先改成仅 DNS）"
+    fi
+
+    if [[ ! -x "$acme_bin" ]]; then
+        echo -e "${BLUE}正在安装 acme.sh ...${NC}"
+        if ! curl -fsSL --connect-timeout 15 https://get.acme.sh -o "$ANYTLS_DIR/acme-install.sh" 2>/dev/null; then
+            echo -e "${RED}下载 acme.sh 安装脚本失败，请检查网络${NC}"
+            return 1
+        fi
+        if ! sh "$ANYTLS_DIR/acme-install.sh" >/dev/null 2>&1 || [[ ! -x "$acme_bin" ]]; then
+            rm -f "$ANYTLS_DIR/acme-install.sh"
+            echo -e "${RED}acme.sh 安装失败${NC}"
+            return 1
+        fi
+        rm -f "$ANYTLS_DIR/acme-install.sh"
+    fi
+
+    "$acme_bin" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
+
+    anytls_open_port 80
+    echo -e "${BLUE}正在申请证书 (Let's Encrypt)，请稍候...${NC}"
+    local log="$ANYTLS_DIR/acme-issue.log"
+    "$acme_bin" --issue -d "$domain" --standalone --keylength ec-256 >"$log" 2>&1
+    local rc=$?
+    # 2 = 证书仍有效无需重新签发，视为成功
+    if [[ $rc -ne 0 && $rc -ne 2 ]]; then
+        echo -e "${RED}证书申请失败，最后几行日志:${NC}"
+        tail -n 8 "$log" 2>/dev/null
+        echo "常见原因: 域名未解析到本机 / 80 端口被防火墙或云厂商安全组拦截 / 申请过于频繁"
+        return 1
+    fi
+
+    if ! "$acme_bin" --install-cert --ecc -d "$domain" \
+        --fullchain-file "$ANYTLS_DIR/server.crt" \
+        --key-file "$ANYTLS_DIR/server.key" \
+        --reloadcmd "systemctl restart $ANYTLS_SERVICE >/dev/null 2>&1 || true" >>"$log" 2>&1; then
+        echo -e "${RED}证书安装失败，日志: $log${NC}"
+        return 1
+    fi
+    chmod 600 "$ANYTLS_DIR/server.key" 2>/dev/null || true
+    if ! openssl x509 -in "$ANYTLS_DIR/server.crt" -noout >/dev/null 2>&1; then
+        echo -e "${RED}生成的证书无效${NC}"
+        return 1
+    fi
+    return 0
+}
+
 anytls_ask_cert() {
     local has_hy2=false choice default_choice="1" input
     if anytls_detect_hy2_cert; then
@@ -445,9 +515,10 @@ anytls_ask_cert() {
         echo -e "${CYAN} 2.${NC} 复用 Hysteria2 的域名证书 (未检测到，不可用)"
     fi
     echo -e "${GREEN} 3.${NC} 使用自己的证书文件"
+    echo -e "${GREEN} 4.${NC} 自动申请域名证书 (acme.sh，无需 hy2；域名需已解析到本机，且 80 端口空闲)"
 
     while true; do
-        echo -n -e "${BLUE}请选择 [1-3，默认 ${default_choice}]: ${NC}"
+        echo -n -e "${BLUE}请选择 [1-4，默认 ${default_choice}]: ${NC}"
         read -r choice || choice=""
         choice="${choice:-$default_choice}"
         case "$choice" in
@@ -511,8 +582,34 @@ anytls_ask_cert() {
                 AT_SNI=""
                 return 0
                 ;;
+            4)
+                while true; do
+                    echo -n -e "${BLUE}请输入要申请证书的域名: ${NC}"
+                    read -r input || input=""
+                    if anytls_valid_domain "$input"; then
+                        break
+                    fi
+                    echo -e "${RED}域名格式无效${NC}"
+                done
+                mkdir -p "$ANYTLS_DIR"
+                chmod 700 "$ANYTLS_DIR" 2>/dev/null || true
+                if ! anytls_issue_cert "$input"; then
+                    echo -e "${YELLOW}已返回证书选择，可改用其他方式${NC}"
+                    continue
+                fi
+                AT_CERT_MODE="acme"
+                AT_DOMAIN="$input"
+                AT_SNI=""
+                AT_CERT_FILE="$ANYTLS_DIR/server.crt"
+                AT_KEY_FILE="$ANYTLS_DIR/server.key"
+                local end4
+                end4=$(openssl x509 -in "$AT_CERT_FILE" -noout -enddate 2>/dev/null | cut -d= -f2) || end4=""
+                echo -e "${GREEN}证书申请成功${end4:+ (到期: $end4)}${NC}"
+                echo "acme.sh 会自动续期，续期后自动重启 AnyTLS 服务"
+                return 0
+                ;;
             *)
-                echo -e "${RED}请输入 1-3${NC}"
+                echo -e "${RED}请输入 1-4${NC}"
                 ;;
         esac
     done
@@ -732,9 +829,13 @@ anytls_uninstall() {
         return 0
     fi
 
-    local port=""
+    local port="" acme_domain=""
     if anytls_load_conf; then
         port="$AT_PORT"
+        [[ "$AT_CERT_MODE" == "acme" ]] && acme_domain="$AT_DOMAIN"
+    fi
+    if [[ -n "$acme_domain" && -x "${HOME:-/root}/.acme.sh/acme.sh" ]]; then
+        "${HOME:-/root}/.acme.sh/acme.sh" --remove -d "$acme_domain" --ecc >/dev/null 2>&1 || true
     fi
 
     systemctl disable --now "$ANYTLS_SERVICE" >/dev/null 2>&1 || true
