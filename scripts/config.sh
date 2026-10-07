@@ -79,6 +79,36 @@ get_current_listen_port() {
     fi
 }
 
+# ACME 证书申请/续期需要 TCP 443 (TLS-ALPN-01 验证)，放行防火墙。幂等，已放行时不做任何改动。
+# 参数: quiet = 静默模式（脚本启动时自动检查用，只有真正放行了才输出）
+open_acme_tcp_port() {
+    local quiet="${1:-}" port=443 opened=""
+    if command -v firewall-cmd &>/dev/null && systemctl is-active --quiet firewalld; then
+        if ! firewall-cmd --query-port=${port}/tcp &>/dev/null; then
+            firewall-cmd --add-port=${port}/tcp --permanent >/dev/null 2>&1
+            firewall-cmd --reload >/dev/null 2>&1
+            opened="Firewalld"
+        fi
+    elif command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
+        if ! ufw status | grep -Eq "^${port}/tcp[[:space:]]+ALLOW"; then
+            ufw allow ${port}/tcp >/dev/null 2>&1
+            opened="UFW"
+        fi
+    elif command -v iptables &>/dev/null; then
+        if ! iptables -C INPUT -p tcp --dport ${port} -j ACCEPT 2>/dev/null; then
+            iptables -I INPUT -p tcp --dport ${port} -j ACCEPT 2>/dev/null
+            command -v netfilter-persistent &>/dev/null && netfilter-persistent save >/dev/null 2>&1
+            opened="Iptables"
+        fi
+    fi
+    if [[ -n "$opened" ]]; then
+        echo "$opened: 已放行 ${port}/tcp (ACME 证书验证与自动续期需要)"
+    elif [[ -z "$quiet" ]]; then
+        echo "TCP ${port} 已放行或未检测到需要配置的防火墙"
+    fi
+    return 0
+}
+
 # ACME 配置模式
 configure_acme_mode() {
     echo -e "${BLUE}ACME 自动证书配置${NC}"
@@ -242,6 +272,9 @@ EOF
     
     echo ""
     echo -e "${GREEN}ACME 配置文件生成成功!${NC}"
+
+    # 放行 TCP 443，保证证书申请与自动续期的 TLS-ALPN 验证可用
+    open_acme_tcp_port
     echo -e "${YELLOW}域名: $domain${NC}"
     echo -e "${YELLOW}邮箱: $email${NC}"
     echo -e "${YELLOW}监听端口: $listen_port${NC}"
