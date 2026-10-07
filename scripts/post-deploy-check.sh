@@ -4,7 +4,7 @@
 # 确保节点部署完成后各项功能正常
 
 # 适度的错误处理
-set -uo pipefail
+# 注意：库文件不要开启 set -e/-u，否则会影响整个管理器（任何一条返回非 0 的命令都会让脚本直接退出）
 
 # 加载公共库
 # SCRIPT_DIR 由主脚本定义，此处已移除以避免覆盖
@@ -237,10 +237,12 @@ check_certificate_config() {
     # 检查 TLS 配置类型
     if grep -q "^acme:" "$config_file"; then
         echo "  🔒 使用 ACME 自动证书"
-        return check_acme_certificate
+        check_acme_certificate
+        return $?
     elif grep -q "^tls:" "$config_file"; then
         echo "  🔒 使用自定义证书"
-        return check_custom_certificate
+        check_custom_certificate
+        return $?
     else
         echo "  ❌ 未找到 TLS 配置"
         return 1

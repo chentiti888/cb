@@ -2,7 +2,7 @@
 
 # Hysteria2 配置生成脚本 (安全版本)
 # 严格错误处理
-set -euo pipefail
+# 注意：库文件不要开启 set -e/-u，否则会影响整个管理器（任何一条返回非 0 的命令都会让脚本直接退出）
 
 # 加载安全输入验证模块
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -135,6 +135,10 @@ anytls_open_port() {
 anytls_close_port() {
     local p="$1"
     [[ -n "$p" ]] || return 0
+    # 80/443 可能还被 nginx 或 hy2 的证书验证使用，不关闭
+    if [[ "$p" == "80" || "$p" == "443" ]]; then
+        return 0
+    fi
     if command -v firewall-cmd >/dev/null 2>&1 && systemctl is-active --quiet firewalld 2>/dev/null; then
         firewall-cmd --permanent --remove-port="${p}/tcp" >/dev/null 2>&1 || true
         firewall-cmd --reload >/dev/null 2>&1 || true
@@ -259,7 +263,8 @@ anytls_write_config() {
     chmod 700 "$ANYTLS_DIR" 2>/dev/null || true
     local server_name="${AT_DOMAIN:-$AT_SNI}"
 
-    cat > "$ANYTLS_JSON" << EOF
+    local new_json="$ANYTLS_DIR/config.new.json"
+    cat > "$new_json" << EOF
 {
   "log": {
     "level": "warn",
@@ -293,15 +298,18 @@ anytls_write_config() {
   ]
 }
 EOF
-    chmod 600 "$ANYTLS_JSON" 2>/dev/null || true
+    chmod 600 "$new_json" 2>/dev/null || true
 
     local out
-    if ! out=$("$ANYTLS_BIN" check -c "$ANYTLS_JSON" 2>&1); then
+    if ! out=$("$ANYTLS_BIN" check -c "$new_json" 2>&1); then
+        rm -f "$new_json"
         echo -e "${RED}配置校验失败:${NC}"
         echo "$out"
         echo -e "${YELLOW}如果提示不认识 anytls，说明 sing-box 版本过低 (需要 >= 1.12.0)，可在菜单里更新内核${NC}"
         return 1
     fi
+    # 校验通过才替换正式配置，失败时旧配置原样保留
+    mv -f "$new_json" "$ANYTLS_JSON"
     return 0
 }
 
@@ -347,7 +355,12 @@ anytls_ask_port() {
         echo -n -e "${BLUE}请输入 AnyTLS 监听端口 (TCP) [默认 ${default}]: ${NC}"
         read -r input || input=""
         input="${input:-$default}"
-        if ! [[ "$input" =~ ^[0-9]+$ ]] || ((input < 1 || input > 65535)); then
+        if ! [[ "$input" =~ ^[0-9]{1,5}$ ]]; then
+            echo -e "${RED}端口无效，请输入 1-65535${NC}"
+            continue
+        fi
+        input=$((10#$input))
+        if ((input < 1 || input > 65535)); then
             echo -e "${RED}端口无效，请输入 1-65535${NC}"
             continue
         fi

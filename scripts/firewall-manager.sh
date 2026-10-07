@@ -4,7 +4,7 @@
 # 自动检测并管理 Linux 系统防火墙
 
 # 适度的错误处理
-set -uo pipefail
+# 注意：库文件不要开启 set -e/-u，否则会影响整个管理器（任何一条返回非 0 的命令都会让脚本直接退出）
 
 # 加载公共库
 # SCRIPT_DIR 由主脚本定义，此处已移除以避免覆盖
@@ -467,6 +467,7 @@ open_port_firewalld() {
         read -r start_firewalld
         if [[ $start_firewalld =~ ^[Yy]$ ]]; then
             systemctl start firewalld
+            firewalld_allow_ssh
             log_success "firewalld 已启动"
         else
             log_error "需要启动 firewalld 才能配置规则"
@@ -499,6 +500,47 @@ open_port_firewalld() {
     verify_port_opened
 }
 
+# 获取 SSH 监听端口（启用或收紧防火墙前先放行，避免把自己锁在外面）
+get_ssh_port() {
+    local p=""
+    if command -v sshd >/dev/null 2>&1; then
+        p=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}') || p=""
+    fi
+    if [[ -z "$p" ]] && command -v ss >/dev/null 2>&1; then
+        p=$(ss -tlnp 2>/dev/null | awk '/sshd/ {n=split($4,a,":"); print a[n]; exit}') || p=""
+    fi
+    echo "${p:-22}"
+}
+
+# 启用 ufw 之前先放行 SSH
+ufw_allow_ssh_first() {
+    local p
+    p=$(get_ssh_port)
+    ufw allow "$p/tcp" >/dev/null 2>&1 || true
+    log_info "已先放行 SSH 端口 $p/tcp，避免启用防火墙后失联"
+}
+
+# 启动 firewalld 之后立刻放行 SSH 端口（默认区域只放行 22）
+firewalld_allow_ssh() {
+    local p
+    p=$(get_ssh_port)
+    firewall-cmd --permanent --add-port="$p/tcp" >/dev/null 2>&1 || true
+    firewall-cmd --reload >/dev/null 2>&1 || true
+    log_info "已放行 SSH 端口 $p/tcp"
+}
+
+# 把 iptables INPUT 默认策略改成 DROP 之前，先放行回环、已建立连接、SSH 和 Hysteria2 端口
+iptables_protect_before_drop() {
+    local p hp="${HYSTERIA_PORT:-443}"
+    p=$(get_ssh_port)
+    iptables -C INPUT -i lo -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -i lo -j ACCEPT
+    iptables -C INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null \
+        || iptables -I INPUT 1 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+    iptables -C INPUT -p tcp --dport "$p" -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p tcp --dport "$p" -j ACCEPT
+    iptables -C INPUT -p udp --dport "$hp" -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p udp --dport "$hp" -j ACCEPT
+    log_info "已先放行 回环、已建立连接、SSH($p/tcp)、Hysteria2($hp/udp)"
+}
+
 # ufw 开放端口
 open_port_ufw() {
     echo -e "${BLUE}=== 使用 ufw 开放端口 ===${NC}"
@@ -512,6 +554,7 @@ open_port_ufw() {
         echo "ufw 未激活，是否激活？ [y/N]"
         read -r enable_ufw
         if [[ $enable_ufw =~ ^[Yy]$ ]]; then
+            ufw_allow_ssh_first
             ufw --force enable
             log_success "ufw 已激活"
         else
@@ -738,6 +781,7 @@ enable_firewall_rules() {
                 read -p "是否启动 firewalld 服务？ [y/N]: " start_fw
                 if [[ $start_fw =~ ^[Yy]$ ]]; then
                     systemctl start firewalld
+                    firewalld_allow_ssh
                     systemctl enable firewalld
                     log_success "firewalld 服务已启动并设为开机自启"
                 else
@@ -753,6 +797,7 @@ enable_firewall_rules() {
                 echo -e "${YELLOW}⚠️  ufw 防火墙未启用${NC}"
                 read -p "是否启用 ufw 防火墙？ [y/N]: " enable_ufw
                 if [[ $enable_ufw =~ ^[Yy]$ ]]; then
+                    ufw_allow_ssh_first
                     ufw --force enable
                     log_success "ufw 防火墙已启用"
                 else
@@ -837,12 +882,13 @@ disable_firewall_rules() {
 
             case $iptables_choice in
                 1)
-                    iptables -F INPUT
                     iptables -P INPUT ACCEPT
+                    iptables -F INPUT
                     save_iptables_rules
                     log_success "已清空 iptables INPUT 规则并设为允许所有"
                     ;;
                 2)
+                    iptables_protect_before_drop
                     iptables -P INPUT DROP
                     save_iptables_rules
                     log_success "已设置 iptables 默认拒绝策略"
@@ -992,8 +1038,10 @@ smart_manage_hysteria_port() {
             case $DETECTED_FIREWALL in
                 $FW_FIREWALLD)
                     systemctl enable --now firewalld
+                    firewalld_allow_ssh
                     ;;
                 $FW_UFW)
+                    ufw_allow_ssh_first
                     ufw --force enable
                     ;;
                 $FW_IPTABLES)

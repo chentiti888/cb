@@ -222,7 +222,7 @@ show_status() {
     if check_hysteria_installed; then
         echo -e "程序状态: ${GREEN}✅ 已安装${NC}"
         echo -n "服务状态: "
-        check_service_status
+        check_service_status || true
         if [[ -f "$CONFIG_PATH" ]]; then
             echo -e "配置文件: ${GREEN}✅ 存在${NC}"
         else
@@ -510,7 +510,7 @@ set_masquerade_domain() {
 
     # 备份配置文件
     if [[ -f "$CONFIG_PATH" ]]; then
-        cp "$CONFIG_PATH" "$CONFIG_PATH.bak"
+        cp -p "$CONFIG_PATH" "$CONFIG_PATH.bak"
         
         # 更新或添加伪装域名配置
         if grep -q "masquerade:" "$CONFIG_PATH"; then
@@ -575,7 +575,7 @@ remove_masquerade_domain() {
     read -r confirm
 
     if [[ $confirm =~ ^[Yy]$ ]]; then
-        cp "$CONFIG_PATH" "$CONFIG_PATH.bak"
+        cp -p "$CONFIG_PATH" "$CONFIG_PATH.bak"
         # 删除masquerade配置块
         sed -i '/masquerade:/,/url:/d' "$CONFIG_PATH"
         log_success "伪装域名配置已删除"
@@ -842,7 +842,7 @@ update_tls_config() {
     fi
     
     # 备份配置文件
-    cp "$CONFIG_PATH" "$CONFIG_PATH.bak"
+    cp -p "$CONFIG_PATH" "$CONFIG_PATH.bak"
     
     # 删除现有的ACME配置
     sed -i '/^acme:/,/^[[:alpha:]]/{ /^acme:/d; /^[[:alpha:]]/!d; }' "$CONFIG_PATH"
@@ -1338,6 +1338,68 @@ view_current_config() {
     wait_for_user
 }
 
+# ---- YAML 分块读写小工具 ----
+# 只操作指定的顶层块，避免 sed 全文件替换误伤其他块里的 password（如 obfs）
+
+# 读取顶层块 $1 里第一个 password 的值
+yaml_block_get_password() {
+    local block="$1" file="$2"
+    awk -v blk="$block" '
+        $0 ~ ("^" blk ":[[:space:]]*$") {inb=1; next}
+        inb && /^[^[:space:]#]/ {inb=0}
+        inb && /^[[:space:]]+password:/ {
+            v=$0
+            sub(/^[[:space:]]+password:[[:space:]]*/, "", v)
+            sub(/[[:space:]]+#.*$/, "", v)
+            gsub(/^"|"[[:space:]]*$/, "", v)
+            print v
+            exit
+        }' "$file" 2>/dev/null
+}
+
+# 把顶层块 $1 里的 password 改成 $3，结果写回文件 $2；找不到块或字段时返回 1 且不改动文件
+yaml_block_set_password() {
+    local block="$1" file="$2" newpw="$3" tmp esc rc
+    esc=${newpw//\\/\\\\}
+    esc=${esc//\"/\\\"}
+    tmp=$(mktemp) || return 1
+    NEWPW="$esc" awk -v blk="$block" '
+        $0 ~ ("^" blk ":[[:space:]]*$") {inb=1; print; next}
+        inb && /^[^[:space:]#]/ {inb=0}
+        inb && !done && /^[[:space:]]+password:/ {
+            match($0, /^[[:space:]]+/)
+            ind = substr($0, 1, RLENGTH)
+            print ind "password: \"" ENVIRON["NEWPW"] "\""
+            done=1
+            next
+        }
+        {print}
+        END {exit done ? 0 : 1}' "$file" > "$tmp" 2>/dev/null
+    rc=$?
+    if [[ $rc -eq 0 && -s "$tmp" ]]; then
+        cat "$tmp" > "$file"
+    else
+        rc=1
+    fi
+    rm -f "$tmp"
+    return $rc
+}
+
+# 删除整个顶层块 $1（到下一个顶层键之前）
+yaml_remove_block() {
+    local block="$1" file="$2" tmp
+    tmp=$(mktemp) || return 1
+    awk -v blk="$block" '
+        $0 ~ ("^" blk ":") {skip=1; next}
+        skip && /^[^[:space:]#]/ {skip=0}
+        skip {next}
+        {print}' "$file" > "$tmp" 2>/dev/null
+    if [[ -s "$tmp" ]]; then
+        cat "$tmp" > "$file"
+    fi
+    rm -f "$tmp"
+}
+
 # 修改认证密码
 modify_auth_password() {
     echo ""
@@ -1345,7 +1407,8 @@ modify_auth_password() {
     
     # 获取当前密码
     local current_password
-    current_password=$(grep -E "^\s*password:" "$CONFIG_PATH" | awk '{print $2}' | tr -d '"' || echo "未设置")
+    current_password=$(yaml_block_get_password auth "$CONFIG_PATH")
+    current_password="${current_password:-未设置}"
     echo "当前密码: $current_password"
     echo ""
     
@@ -1358,10 +1421,14 @@ modify_auth_password() {
     fi
     
     # 备份配置文件
-    cp "$CONFIG_PATH" "$CONFIG_PATH.bak"
+    cp -p "$CONFIG_PATH" "$CONFIG_PATH.bak"
     
     # 修改密码
-    sed -i "s/password:.*/password: \"$new_password\"/" "$CONFIG_PATH"
+    if ! yaml_block_set_password auth "$CONFIG_PATH" "$new_password"; then
+        log_error "未在配置中找到 auth 块的 password 字段，未做修改"
+        wait_for_user
+        return
+    fi
     
     log_success "认证密码已更新"
     echo ""
@@ -1406,7 +1473,7 @@ modify_port_settings() {
     fi
     
     # 备份配置文件
-    cp "$CONFIG_PATH" "$CONFIG_PATH.bak"
+    cp -p "$CONFIG_PATH" "$CONFIG_PATH.bak"
     
     # 修改端口
     sed -i "s/:$current_port/:$new_port/g" "$CONFIG_PATH"
@@ -1461,12 +1528,12 @@ modify_obfs_settings() {
     
     # 检查当前混淆配置
     local current_obfs
-    current_obfs=$(grep -E "^\s*type: salamander" "$CONFIG_PATH" && echo "启用" || echo "禁用")
+    current_obfs=$(grep -qE "^obfs:" "$CONFIG_PATH" && echo "启用" || echo "禁用")
     echo "当前混淆状态: $current_obfs"
     
     if [[ "$current_obfs" == "启用" ]]; then
         local current_obfs_password
-        current_obfs_password=$(grep -A1 "type: salamander" "$CONFIG_PATH" | grep "password:" | awk '{print $2}' | tr -d '"')
+        current_obfs_password=$(yaml_block_get_password obfs "$CONFIG_PATH")
         echo "当前混淆密码: $current_obfs_password"
     fi
     
@@ -1483,7 +1550,7 @@ modify_obfs_settings() {
     case $obfs_choice in
         1|2|3)
             # 备份配置文件
-            cp "$CONFIG_PATH" "$CONFIG_PATH.bak"
+            cp -p "$CONFIG_PATH" "$CONFIG_PATH.bak"
             
             case $obfs_choice in
                 1)
@@ -1494,23 +1561,19 @@ modify_obfs_settings() {
                         echo "生成的随机密码: $obfs_password"
                     fi
                     
-                    # 添加混淆配置
-                    if ! grep -q "obfs:" "$CONFIG_PATH"; then
-                        sed -i "/listen:/a\\
-obfs:\\
-  type: salamander\\
-  password: \"$obfs_password\"" "$CONFIG_PATH"
-                    else
-                        sed -i "/obfs:/,+2c\\
-obfs:\\
-  type: salamander\\
-  password: \"$obfs_password\"" "$CONFIG_PATH"
+                    # 添加混淆配置：先删掉旧的 obfs 块，再按 Hysteria2 要求的结构追加到文件末尾
+                    yaml_remove_block obfs "$CONFIG_PATH"
+                    local esc_obfs=${obfs_password//\\/\\\\}
+                    esc_obfs=${esc_obfs//\"/\\\"}
+                    if [[ -n "$(tail -c1 "$CONFIG_PATH")" ]]; then
+                        echo "" >> "$CONFIG_PATH"
                     fi
+                    printf 'obfs:\n  type: salamander\n  salamander:\n    password: "%s"\n' "$esc_obfs" >> "$CONFIG_PATH"
                     log_success "混淆已启用"
                     ;;
                 2)
                     # 删除混淆配置
-                    sed -i '/obfs:/,+2d' "$CONFIG_PATH"
+                    yaml_remove_block obfs "$CONFIG_PATH"
                     log_success "混淆已禁用"
                     ;;
                 3)
@@ -1530,7 +1593,11 @@ obfs:\\
                     fi
                     
                     # 修改混淆密码
-                    sed -i "/obfs:/,+2s/password:.*/password: \"$new_obfs_password\"/" "$CONFIG_PATH"
+                    if ! yaml_block_set_password obfs "$CONFIG_PATH" "$new_obfs_password"; then
+                        log_error "未在配置中找到 obfs 块的 password 字段，未做修改"
+                        wait_for_user
+                        return
+                    fi
                     log_success "混淆密码已更新"
                     ;;
             esac
@@ -2085,7 +2152,7 @@ edit_config_file() {
     read -r editor_choice
     
     # 备份配置文件
-    cp "$CONFIG_PATH" "$CONFIG_PATH.bak"
+    cp -p "$CONFIG_PATH" "$CONFIG_PATH.bak"
     log_info "已备份配置文件"
     
     case $editor_choice in
@@ -2253,6 +2320,7 @@ uninstall_all_dependencies() {
     echo "• Hysteria2 程序和配置"
     echo "• nginx (订阅链接依赖)"
     echo "• 订阅文件 (/var/www/html/sub/)"
+    echo "• AnyTLS 服务和程序 (如已安装)"
     echo "• 端口跳跃规则"
     echo "• 系统用户账户"
     echo ""
@@ -2295,6 +2363,8 @@ uninstall_all_dependencies() {
     fi
     
     # 2. 卸载 nginx (订阅链接依赖)
+    cleanup_anytls
+
     log_info "步骤 2/4: 卸载 nginx..."
     if command -v nginx &>/dev/null; then
         systemctl stop nginx 2>/dev/null
@@ -2349,6 +2419,7 @@ uninstall_everything() {
     echo -e "${RED}警告: 此操作将删除:${NC}"
     echo "• Hysteria2 程序和配置"
     echo "• nginx 及订阅文件"
+    echo "• AnyTLS 服务和程序 (如已安装)"
     echo "• 管理脚本 (s-hy2)"
     echo "• 所有相关目录和文件"
     echo "• 端口跳跃规则"
@@ -2383,6 +2454,8 @@ uninstall_everything() {
     fi
     
     # 4. 卸载 nginx 和清理订阅文件
+    cleanup_anytls
+
     log_info "步骤 4/7: 卸载 nginx 和清理订阅文件..."
     if command -v nginx &>/dev/null; then
         systemctl stop nginx 2>/dev/null
@@ -2398,8 +2471,9 @@ uninstall_everything() {
         fi
     fi
     
-    # 删除web目录
-    rm -rf /var/www 2>/dev/null
+    # 只删除本脚本创建的订阅目录，不动 /var/www 下其他网站的内容
+    rm -rf /var/www/html/sub 2>/dev/null
+    rmdir /var/www/html /var/www 2>/dev/null || true
     
     # 5. 删除配置文件和证书
     log_info "步骤 5/7: 删除配置文件和证书..."
@@ -2432,7 +2506,7 @@ uninstall_everything() {
     fi
     
     # 删除桌面快捷方式
-    if [[ -n "$SUDO_USER" ]]; then
+    if [[ -n "${SUDO_USER:-}" ]]; then
         rm -f "/home/$SUDO_USER/Desktop/S-Hy2-Manager.desktop" 2>/dev/null
     fi
     
@@ -2441,11 +2515,35 @@ uninstall_everything() {
     echo -e "${BLUE}系统已完全清理，感谢使用 S-Hy2 管理脚本${NC}"
     echo ""
     echo -e "${YELLOW}重新安装:${NC}"
-2436→    echo "curl -fsSL https://raw.githubusercontent.com/chentiti888/cb/main/quick-install.sh | sudo bash"
+    echo "curl -fsSL https://raw.githubusercontent.com/chentiti888/cb/main/quick-install.sh | sudo bash"
     echo ""
     
     # 由于脚本本身已被删除，这里直接退出
     exit 0
+}
+
+# 清理 AnyTLS（如已安装）：停服务、删 unit/内核/配置，并关闭它放行的防火墙端口
+cleanup_anytls() {
+    if [[ ! -f /etc/systemd/system/anytls-server.service && ! -x /usr/local/bin/sing-box-anytls && ! -d /etc/anytls ]]; then
+        return 0
+    fi
+    log_info "清理 AnyTLS..."
+    local port=""
+    if [[ -f /etc/anytls/anytls.conf ]]; then
+        port=$(sed -nE "s/^AT_PORT='?([0-9]+)'?.*/\\1/p" /etc/anytls/anytls.conf 2>/dev/null | head -1) || port=""
+    fi
+    systemctl disable --now anytls-server.service >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/anytls-server.service
+    systemctl daemon-reload 2>/dev/null || true
+    if [[ -n "$port" && "$port" != "80" && "$port" != "443" && -f "$SCRIPTS_DIR/anytls.sh" ]]; then
+        # shellcheck source=/dev/null
+        if source "$SCRIPTS_DIR/anytls.sh" 2>/dev/null; then
+            anytls_close_port "$port" || true
+        fi
+    fi
+    rm -f /usr/local/bin/sing-box-anytls
+    rm -rf /etc/anytls
+    log_info "已清理 AnyTLS"
 }
 
 # 清理端口跳跃配置
@@ -2516,7 +2614,7 @@ about_script() {
     echo "日志查看: journalctl -u hysteria-server"
     echo ""
     echo -e "${YELLOW}获取支持:${NC}"
-2506→    echo "• GitHub: https://github.com/chentiti888/cb"
+    echo "• GitHub: https://github.com/chentiti888/cb"
     echo "• Issues: 在 GitHub 仓库提交问题"
     echo ""
     wait_for_user
@@ -2557,9 +2655,21 @@ main() {
         fi
     fi
     
+    # 自愈：旧版本生成的 nginx 订阅配置开启了目录列表 (autoindex on)，任何人访问 /sub/ 都能看到订阅文件名
+    local _ng_conf
+    for _ng_conf in /etc/nginx/conf.d/s-hy2-sub.conf /etc/nginx/sites-available/default; do
+        if [[ -f "$_ng_conf" ]] && grep -q 'autoindex on;' "$_ng_conf" 2>/dev/null; then
+            sed -i '/location[[:space:]]\+\/sub/,/}/ s/autoindex on;/autoindex off;/' "$_ng_conf" 2>/dev/null || true
+            if nginx -t >/dev/null 2>&1; then
+                systemctl reload nginx >/dev/null 2>&1 || true
+            fi
+            log_info "已关闭 nginx 订阅目录列表 (autoindex)" || true
+        fi
+    done
+
     # 设置错误处理
     trap 'echo -e "\n${RED}脚本被中断${NC}"; exit 130' INT
-    trap 'echo -e "\n${RED}脚本执行错误${NC}"; exit 1' ERR
+    # 注意：这里不设置 ERR trap。菜单里很多命令允许返回非 0，设置后会让整个脚本直接退出
     
     while true; do
         print_header

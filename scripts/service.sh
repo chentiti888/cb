@@ -3,9 +3,9 @@
 # Hysteria2 服务管理脚本 - 简化版本
 
 # 加载公共库
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "$SCRIPT_DIR/common.sh" ]]; then
-    source "$SCRIPT_DIR/common.sh"
+SERVICE_SH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$SERVICE_SH_DIR/common.sh" ]]; then
+    source "$SERVICE_SH_DIR/common.sh"
 else
     # 如果无法加载公共库，则使用本地颜色定义
     readonly RED='\033[0;31m'

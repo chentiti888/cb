@@ -1271,7 +1271,7 @@ server {
     location /sub {
         alias $sub_dir;
         index index.html;
-        autoindex on;
+        autoindex off;
         add_header Cache-Control no-store;
         access_log off;
     }
@@ -1297,7 +1297,7 @@ EOF
             sed -i 's#/usr/share/nginx/html#/var/www/html#g' /etc/nginx/nginx.conf 2>/dev/null || true
         fi
         # 1.2 确保 conf.d 被包含到 http 块
-        if [[ -f "/etc/nginx/nginx.conf" ]] && ! grep -q "/etc/nginx/conf.d/*.conf" /etc/nginx/nginx.conf; then
+        if [[ -f "/etc/nginx/nginx.conf" ]] && ! grep -qF "/etc/nginx/conf.d/*.conf" /etc/nginx/nginx.conf; then
             local tmp_conf="/etc/nginx/nginx.conf.tmp.$$"
             awk '
                 BEGIN{added=0}

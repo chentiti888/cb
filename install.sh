@@ -4,7 +4,7 @@
 # 作为 s-hy2 管理脚本的一部分
 
 # 适度的错误处理
-set -uo pipefail
+# 注意：库文件不要开启 set -e/-u，否则会影响整个管理器（任何一条返回非 0 的命令都会让脚本直接退出）
 
 # 加载公共库
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -221,7 +221,7 @@ server {
     location /sub {
         alias /var/www/html/sub;
         index index.html;
-        autoindex on;
+        autoindex off;
         add_header Cache-Control no-store;
         access_log off;
     }
@@ -230,7 +230,7 @@ EOF
     if [[ -f "/etc/nginx/sites-available/default" ]]; then
         sed -i 's#/usr/share/nginx/html#/var/www/html#g' /etc/nginx/sites-available/default 2>/dev/null || true
         if ! grep -qE 'location[[:space:]]+/sub' /etc/nginx/sites-available/default; then
-            awk -v block="    location /sub {\n        alias /var/www/html/sub;\n        index index.html;\n        autoindex on;\n        add_header Cache-Control no-store;\n    }\n" '
+            awk -v block="    location /sub {\n        alias /var/www/html/sub;\n        index index.html;\n        autoindex off;\n        add_header Cache-Control no-store;\n    }\n" '
                 /server[[:space:]]*\{/ {print; inserver=1; next}
                 inserver && /root[[:space:]]+/ && !added {print; print block; added=1; next}
                 {print}
@@ -245,7 +245,7 @@ EOF
         ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default 2>/dev/null || true
     elif [[ -f "/etc/nginx/nginx.conf" ]]; then
         sed -i 's#/usr/share/nginx/html#/var/www/html#g' /etc/nginx/nginx.conf 2>/dev/null || true
-        if ! grep -q "/etc/nginx/conf.d/*.conf" /etc/nginx/nginx.conf; then
+        if ! grep -qF "/etc/nginx/conf.d/*.conf" /etc/nginx/nginx.conf; then
             local tmp_conf="/etc/nginx/nginx.conf.tmp.$$"
             awk '
                 BEGIN{added=0}

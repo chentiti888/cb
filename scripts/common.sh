@@ -10,7 +10,7 @@ readonly COMMON_SH_LOADED=true
 # 为所有脚本提供标准化的错误处理、日志记录和工具函数
 
 # 适度的错误处理 (不使用 -e 避免意外退出)
-set -uo pipefail
+# 注意：库文件不要开启 set -e/-u，否则会影响整个管理器（任何一条返回非 0 的命令都会让脚本直接退出）
 
 # 全局变量 (防止重复定义)
 if [[ -z "${SCRIPT_NAME:-}" ]]; then
@@ -296,7 +296,7 @@ require_root() {
 # 标准化错误处理函数
 setup_error_handling() {
     # 统一的错误处理设置
-    set -uo pipefail
+    # (已移除 set -uo pipefail)
 
     # 捕获ERR信号并调用错误处理函数
     trap 'handle_script_error $? $LINENO "$BASH_COMMAND" "${FUNCNAME[*]:-main}"' ERR
