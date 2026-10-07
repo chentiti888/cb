@@ -170,17 +170,17 @@ perform_update() {
             # 简单验证文件内容（检查是否包含 HTML 错误页）
             if head -n 1 "$temp_dir/$filename" | grep -qi "<!DOCTYPE html"; then
                 echo -e "\033[0;31m失败 (404 或网络错误)\033[0m"
-                ((fail_count++))
+                fail_count=$((fail_count+1))
             else
                 # 移动文件并设置权限
                 mv "$temp_dir/$filename" "$target_path"
                 chmod +x "$target_path"
                 echo -e "\033[0;32m成功\033[0m"
-                ((success_count++))
+                success_count=$((success_count+1))
             fi
         else
             echo -e "\033[0;31m下载失败\033[0m"
-            ((fail_count++))
+            fail_count=$((fail_count+1))
         fi
     done
     
