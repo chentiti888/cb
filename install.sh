@@ -141,9 +141,16 @@ install_hysteria2_binary() {
 
 # 配置系统服务
 configure_system_service() {
-    local service_file="/lib/systemd/system/hysteria-server.service"
-
-    if [[ ! -f "$service_file" ]] && [[ ! -f "/usr/lib/systemd/system/hysteria-server.service" ]]; then
+    local found=false f
+    for f in /etc/systemd/system/hysteria-server.service \
+             /lib/systemd/system/hysteria-server.service \
+             /usr/lib/systemd/system/hysteria-server.service; do
+        if [[ -f "$f" ]]; then
+            found=true
+            break
+        fi
+    done
+    if ! $found; then
         return 1
     fi
 
