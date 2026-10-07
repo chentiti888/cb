@@ -200,89 +200,9 @@ verify_installation() {
     return 0
 }
 
-configure_web_server_and_subscription() {
-    local need_install_nginx=false
-    if ! command -v nginx &>/dev/null; then
-        need_install_nginx=true
-    fi
-    echo "正在配置订阅服务 (nginx)..."
-    if $need_install_nginx; then
-        echo "未检测到 nginx，正在安装，可能需要 1-3 分钟，请耐心等待..."
-        if command -v apt &>/dev/null; then
-            DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a timeout 600 apt-get update -y >/dev/null 2>&1 || true
-            DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a timeout 600 apt-get install -y nginx >/dev/null 2>&1 </dev/null \
-                || echo "⚠ nginx 安装失败或超时，订阅功能可能不可用，可稍后手动安装 nginx"
-        elif command -v yum &>/dev/null; then
-            timeout 600 yum install -y nginx >/dev/null 2>&1 </dev/null || echo "⚠ nginx 安装失败或超时"
-        elif command -v dnf &>/dev/null; then
-            timeout 600 dnf install -y nginx >/dev/null 2>&1 </dev/null || echo "⚠ nginx 安装失败或超时"
-        fi
-        systemctl enable nginx >/dev/null 2>&1 || true
-        systemctl start nginx >/dev/null 2>&1 || true
-    fi
-    mkdir -p /var/www/html/sub
-    local nginx_conf_dir="/etc/nginx/conf.d"
-    local conf_file="$nginx_conf_dir/s-hy2-sub.conf"
-    mkdir -p "$nginx_conf_dir"
-    cat > "$conf_file" << EOF
-server {
-    listen 80;
-    server_name _;
-    location /sub {
-        alias /var/www/html/sub;
-        index index.html;
-        autoindex off;
-        add_header Cache-Control no-store;
-        access_log off;
-    }
-}
-EOF
-    if [[ -f "/etc/nginx/sites-available/default" ]]; then
-        sed -i 's#/usr/share/nginx/html#/var/www/html#g' /etc/nginx/sites-available/default 2>/dev/null || true
-        if ! grep -qE 'location[[:space:]]+/sub' /etc/nginx/sites-available/default; then
-            awk -v block="    location /sub {\n        alias /var/www/html/sub;\n        index index.html;\n        autoindex off;\n        add_header Cache-Control no-store;\n    }\n" '
-                /server[[:space:]]*\{/ {print; inserver=1; next}
-                inserver && /root[[:space:]]+/ && !added {print; print block; added=1; next}
-                {print}
-            ' /etc/nginx/sites-available/default > /etc/nginx/sites-available/default.tmp 2>/dev/null || true
-            if [[ -s /etc/nginx/sites-available/default.tmp ]]; then
-                mv /etc/nginx/sites-available/default.tmp /etc/nginx/sites-available/default
-            else
-                rm -f /etc/nginx/sites-available/default.tmp
-            fi
-        fi
-        mkdir -p /etc/nginx/sites-enabled
-        ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default 2>/dev/null || true
-    elif [[ -f "/etc/nginx/nginx.conf" ]]; then
-        sed -i 's#/usr/share/nginx/html#/var/www/html#g' /etc/nginx/nginx.conf 2>/dev/null || true
-        if ! grep -qF "/etc/nginx/conf.d/*.conf" /etc/nginx/nginx.conf; then
-            local tmp_conf="/etc/nginx/nginx.conf.tmp.$$"
-            awk '
-                BEGIN{added=0}
-                /http[[:space:]]*{/ {print; inhttp=1; next}
-                inhttp && /^}/ && !added {print "    include /etc/nginx/conf.d/*.conf;"; added=1; inhttp=0; print; next}
-                {print}
-            ' /etc/nginx/nginx.conf > "$tmp_conf" 2>/dev/null || true
-            if [[ -s "$tmp_conf" ]]; then
-                mv "$tmp_conf" /etc/nginx/nginx.conf
-            else
-                rm -f "$tmp_conf"
-            fi
-        fi
-    fi
-    nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1 || systemctl restart nginx >/dev/null 2>&1
-    if command -v firewall-cmd &>/dev/null && systemctl is-active --quiet firewalld; then
-        firewall-cmd --add-port=80/tcp --permanent >/dev/null 2>&1 || true
-        firewall-cmd --reload >/dev/null 2>&1 || true
-    elif command -v ufw &>/dev/null && ufw status | grep -q "Status: active"; then
-        ufw allow 80/tcp >/dev/null 2>&1 || true
-    elif command -v iptables &>/dev/null; then
-        iptables -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 80 -j ACCEPT >/dev/null 2>&1
-    fi
-    chown -R www-data:www-data /var/www/html 2>/dev/null || chown -R nginx:nginx /var/www/html 2>/dev/null || true
-    chmod -R 755 /var/www/html 2>/dev/null || true
-    echo "✓ 订阅服务配置完成"
-}
+# 注意：安装时不再自动安装 nginx。
+# 订阅链接功能（主菜单 8）第一次使用时，会询问是否安装并自动配置 nginx（见 scripts/node-info.sh）。
+# 这样只用 Hysteria2 / AnyTLS 的机器不会多一个常驻服务，80 端口也保持空闲。
 
 ensure_systemd_restart_policy() {
     local dropin_dir="/etc/systemd/system/hysteria-server.service.d"
@@ -429,7 +349,6 @@ install_hysteria2() {
         create_config_directory
         configure_system_service
         verify_installation || install_success=false
-        configure_web_server_and_subscription
         ensure_systemd_restart_policy
         open_core_ports
     fi
