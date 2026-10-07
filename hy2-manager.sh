@@ -2539,6 +2539,15 @@ main() {
     # 检查基本要求
     check_root
     check_script_integrity
+
+    # 自愈：端口跳跃配置存在，但开机恢复服务缺失时（例如旧版本脚本开启的跳跃），自动补建
+    if [[ -f /etc/hysteria/port-hopping.conf && ! -f /etc/systemd/system/hy2-port-hopping.service ]]; then
+        if safe_source_script "$SCRIPTS_DIR/config.sh" "配置脚本" >/dev/null 2>&1; then
+            install_port_hopping_service >/dev/null 2>&1 || true
+            systemctl start hy2-port-hopping.service >/dev/null 2>&1 || true
+            log_info "已补建端口跳跃开机自动恢复服务 (hy2-port-hopping.service)" || true
+        fi
+    fi
     
     # 设置错误处理
     trap 'echo -e "\n${RED}脚本被中断${NC}"; exit 130' INT
