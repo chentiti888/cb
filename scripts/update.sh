@@ -165,9 +165,9 @@ perform_update() {
         
         echo -n "正在更新 $file ... "
         
-        if curl -s --connect-timeout 10 -o "$temp_dir/$filename" "$url"; then
+        if curl -fsS --connect-timeout 10 -o "$temp_dir/$filename" "$url" 2>/dev/null && [[ -s "$temp_dir/$filename" ]]; then
             # 简单验证文件内容（检查是否包含 HTML 错误页）
-            if grep -q "<!DOCTYPE html>" "$temp_dir/$filename"; then
+            if head -n 1 "$temp_dir/$filename" | grep -qi "<!DOCTYPE html"; then
                 echo -e "\033[0;31m失败 (404 或网络错误)\033[0m"
                 ((fail_count++))
             else
