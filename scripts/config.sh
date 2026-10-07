@@ -893,6 +893,18 @@ ask_port_hopping_config() {
 }
 
 # 询问是否重启服务
+# 确保开机自启（此前手动配置只重启不 enable，重启 VPS 后服务不会自动运行）
+# 注意：outbound-manager.sh 里也有同名的 ask_restart_service，后加载的会覆盖前者，
+# 所以这里单独做成函数，在调用处显式调用，不依赖 ask_restart_service
+ensure_hysteria_autostart() {
+    if ! systemctl is-enabled --quiet hysteria-server 2>/dev/null; then
+        if systemctl enable hysteria-server >/dev/null 2>&1; then
+            echo -e "${GREEN}已启用开机自启${NC}"
+        fi
+    fi
+    return 0
+}
+
 ask_restart_service() {
     echo ""
     echo -n -e "${YELLOW}配置已完成，是否立即重启 Hysteria2 服务? [Y/n]: ${NC}"
@@ -1338,6 +1350,7 @@ generate_hysteria_config() {
     ask_port_hopping_config
 
     # 询问是否重启服务
+    ensure_hysteria_autostart
     ask_restart_service
 
     echo ""
