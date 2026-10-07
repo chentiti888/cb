@@ -31,10 +31,10 @@ ANYTLS_DEFAULT_SNI="cdn.jsdelivr.net"
 # 当前配置（由 anytls_load_conf 读取）
 AT_PORT=""
 AT_PASSWORD=""
-AT_CERT_MODE=""   # self | hy2 | custom | acme
+AT_CERT_MODE=""   # self | custom | acme (旧版安装可能是 hy2，仍兼容)
 AT_CERT_FILE=""
 AT_KEY_FILE=""
-AT_DOMAIN=""      # hy2/custom 模式下的真实域名
+AT_DOMAIN=""      # custom/acme 模式下的真实域名
 AT_SNI=""         # self 模式下的伪装 SNI
 
 # ---------------------------------------------------------------- 基础工具
@@ -391,31 +391,6 @@ anytls_ask_password() {
     done
 }
 
-# 探测 hy2 的 ACME 证书（成功时设置 AT_HY2_DOMAIN/AT_HY2_CRT/AT_HY2_KEY）
-anytls_detect_hy2_cert() {
-    AT_HY2_DOMAIN=""; AT_HY2_CRT=""; AT_HY2_KEY=""
-    local d="" crt=""
-
-    if [[ -f /etc/hysteria/server-domain.conf ]]; then
-        d=$(head -1 /etc/hysteria/server-domain.conf 2>/dev/null | tr -d '[:space:]') || d=""
-    fi
-    if [[ -z "$d" && -f /etc/hysteria/config.yaml ]]; then
-        d=$(awk '/^acme:/{f=1;next} f&&/^[^ \t#]/{f=0} f&&/^[ \t]*-[ \t]*/{sub(/^[ \t]*-[ \t]*/,""); sub(/[ \t]*#.*$/,""); print; exit}' \
-            /etc/hysteria/config.yaml 2>/dev/null | tr -d '[:space:]"'"'"'') || d=""
-    fi
-    [[ -n "$d" ]] || return 1
-
-    if [[ -d /var/lib/hysteria/acme ]]; then
-        crt=$(find /var/lib/hysteria/acme -type f -name "${d}.crt" 2>/dev/null | head -1) || crt=""
-    fi
-    [[ -n "$crt" && -f "${crt%.crt}.key" ]] || return 1
-
-    AT_HY2_DOMAIN="$d"
-    AT_HY2_CRT="$crt"
-    AT_HY2_KEY="${crt%.crt}.key"
-    return 0
-}
-
 anytls_gen_selfsigned() {
     local sni="$1"
     mkdir -p "$ANYTLS_DIR"
@@ -500,25 +475,16 @@ anytls_issue_cert() {
 }
 
 anytls_ask_cert() {
-    local has_hy2=false choice default_choice="1" input
-    if anytls_detect_hy2_cert; then
-        has_hy2=true
-        default_choice="2"
-    fi
+    local choice default_choice="1" input
 
     echo ""
     echo -e "${YELLOW}请选择证书方式:${NC}"
     echo -e "${GREEN} 1.${NC} 自签名证书 (最简单，客户端需开启\"允许不安全\")"
-    if $has_hy2; then
-        echo -e "${GREEN} 2.${NC} 复用 Hysteria2 的域名证书 [检测到: $AT_HY2_DOMAIN] (推荐，无需\"允许不安全\"，自动续期)"
-    else
-        echo -e "${CYAN} 2.${NC} 复用 Hysteria2 的域名证书 (未检测到，不可用)"
-    fi
-    echo -e "${GREEN} 3.${NC} 使用自己的证书文件"
-    echo -e "${GREEN} 4.${NC} 自动申请域名证书 (acme.sh，无需 hy2；域名需已解析到本机，且 80 端口空闲)"
+    echo -e "${GREEN} 2.${NC} 使用自己的证书文件"
+    echo -e "${GREEN} 3.${NC} 自动申请域名证书 (acme.sh；域名需已解析到本机，且 80 端口空闲)"
 
     while true; do
-        echo -n -e "${BLUE}请选择 [1-4，默认 ${default_choice}]: ${NC}"
+        echo -n -e "${BLUE}请选择 [1-3，默认 ${default_choice}]: ${NC}"
         read -r choice || choice=""
         choice="${choice:-$default_choice}"
         case "$choice" in
@@ -542,22 +508,6 @@ anytls_ask_cert() {
                 return 0
                 ;;
             2)
-                if ! $has_hy2; then
-                    echo -e "${RED}没有检测到 Hysteria2 的域名证书，请选其他方式${NC}"
-                    continue
-                fi
-                AT_CERT_MODE="hy2"
-                AT_DOMAIN="$AT_HY2_DOMAIN"
-                AT_SNI=""
-                AT_CERT_FILE="$AT_HY2_CRT"
-                AT_KEY_FILE="$AT_HY2_KEY"
-                local end
-                end=$(openssl x509 -in "$AT_CERT_FILE" -noout -enddate 2>/dev/null | cut -d= -f2) || end=""
-                echo -e "${GREEN}将使用 $AT_DOMAIN 的证书${end:+ (到期: $end)}${NC}"
-                echo "证书由 Hysteria2 自动续期，sing-box 检测到文件变化会自动重新加载"
-                return 0
-                ;;
-            3)
                 while true; do
                     echo -n -e "${BLUE}证书对应的域名: ${NC}"
                     read -r input || input=""
@@ -582,7 +532,7 @@ anytls_ask_cert() {
                 AT_SNI=""
                 return 0
                 ;;
-            4)
+            3)
                 while true; do
                     echo -n -e "${BLUE}请输入要申请证书的域名: ${NC}"
                     read -r input || input=""
@@ -609,7 +559,7 @@ anytls_ask_cert() {
                 return 0
                 ;;
             *)
-                echo -e "${RED}请输入 1-4${NC}"
+                echo -e "${RED}请输入 1-3${NC}"
                 ;;
         esac
     done
