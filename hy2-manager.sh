@@ -232,17 +232,6 @@ show_status() {
         echo -e "程序状态: ${RED}❌ 未安装${NC}"
     fi
     echo ""
-
-    # AnyTLS 状态（仅在已安装时显示）
-    if [[ -x /usr/local/bin/sing-box-anytls ]]; then
-        echo -e "${CYAN}AnyTLS 状态:${NC}"
-        if systemctl is-active --quiet anytls-server.service 2>/dev/null; then
-            echo -e "服务状态: ${GREEN}✅ 运行中${NC}"
-        else
-            echo -e "服务状态: ${YELLOW}⏸️  未运行${NC}"
-        fi
-        echo ""
-    fi
 }
 
 # 安全地执行脚本
@@ -2601,17 +2590,17 @@ main() {
             12) about_script ;;
             13)
                 if safe_source_script "$SCRIPTS_DIR/sys-opt.sh" "系统优化脚本"; then
-                fi
-                ;;
-            15)
-                if safe_source_script "$SCRIPTS_DIR/anytls.sh" "AnyTLS 模块"; then
-                    anytls_menu
                     sys_optimization_menu
                 fi
                 ;;
             14)
                 if safe_source_script "$SCRIPTS_DIR/update.sh" "更新模块"; then
                     update_menu
+                fi
+                ;;
+            15)
+                if safe_source_script "$SCRIPTS_DIR/anytls.sh" "AnyTLS 模块"; then
+                    anytls_menu
                 fi
                 ;;
             0)
