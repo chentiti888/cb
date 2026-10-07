@@ -362,9 +362,11 @@ install_hysteria2() {
     fi
     
     echo ""
-    read -p "按回车键继续..." -r
-    
-    return $([ $install_success = true ] && echo 0 || echo 1)
+    if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+        read -p "按回车键继续..." -r
+    fi
+
+    $install_success
 }
 
 # 卸载函数 (如果需要在这里处理)

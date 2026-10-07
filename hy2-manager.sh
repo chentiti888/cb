@@ -1843,7 +1843,9 @@ disable_port_hopping() {
                 echo ""
                 echo -e "${BLUE}当前监听端口: $current_port${NC}"
                 
-                local current_port_rules=$(iptables -t nat -L PREROUTING -n --line-numbers 2>/dev/null | grep "REDIRECT.*--to-ports $current_port")
+                # 注意：iptables -L 输出的是 "redir ports 443"，不含 "--to-ports"，用 -S 才能匹配
+                local current_port_rules
+                current_port_rules=$(iptables -t nat -S PREROUTING 2>/dev/null | grep -E -- "-j REDIRECT --to-ports ${current_port}( |$)") || current_port_rules=""
                 if [[ -n "$current_port_rules" ]]; then
                     echo -e "${YELLOW}将要删除的规则:${NC}"
                     echo "$current_port_rules"
@@ -2104,7 +2106,9 @@ show_port_hopping_details() {
             
             # 显示当前监听端口相关的iptables规则
             echo -e "${YELLOW}当前监听端口 ($current_port) 的相关规则:${NC}"
-            local current_port_rules=$(iptables -t nat -L PREROUTING -n --line-numbers 2>/dev/null | grep "REDIRECT.*--to-ports $current_port")
+            # 注意：iptables -L 输出的是 "redir ports 443"，不含 "--to-ports"，用 -S 才能匹配
+            local current_port_rules
+            current_port_rules=$(iptables -t nat -S PREROUTING 2>/dev/null | grep -E -- "-j REDIRECT --to-ports ${current_port}( |$)") || current_port_rules=""
             if [[ -n "$current_port_rules" ]]; then
                 echo "$current_port_rules"
             else
