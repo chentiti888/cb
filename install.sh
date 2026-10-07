@@ -205,14 +205,17 @@ configure_web_server_and_subscription() {
     if ! command -v nginx &>/dev/null; then
         need_install_nginx=true
     fi
+    echo "正在配置订阅服务 (nginx)..."
     if $need_install_nginx; then
+        echo "未检测到 nginx，正在安装，可能需要 1-3 分钟，请耐心等待..."
         if command -v apt &>/dev/null; then
-            apt update -y >/dev/null 2>&1
-            apt install -y nginx >/dev/null 2>&1
+            DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a timeout 600 apt-get update -y >/dev/null 2>&1 || true
+            DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a timeout 600 apt-get install -y nginx >/dev/null 2>&1 </dev/null \
+                || echo "⚠ nginx 安装失败或超时，订阅功能可能不可用，可稍后手动安装 nginx"
         elif command -v yum &>/dev/null; then
-            yum install -y nginx >/dev/null 2>&1
+            timeout 600 yum install -y nginx >/dev/null 2>&1 </dev/null || echo "⚠ nginx 安装失败或超时"
         elif command -v dnf &>/dev/null; then
-            dnf install -y nginx >/dev/null 2>&1
+            timeout 600 dnf install -y nginx >/dev/null 2>&1 </dev/null || echo "⚠ nginx 安装失败或超时"
         fi
         systemctl enable nginx >/dev/null 2>&1 || true
         systemctl start nginx >/dev/null 2>&1 || true
@@ -278,6 +281,7 @@ EOF
     fi
     chown -R www-data:www-data /var/www/html 2>/dev/null || chown -R nginx:nginx /var/www/html 2>/dev/null || true
     chmod -R 755 /var/www/html 2>/dev/null || true
+    echo "✓ 订阅服务配置完成"
 }
 
 ensure_systemd_restart_policy() {
